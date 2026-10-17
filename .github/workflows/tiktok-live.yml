@@ -1,9 +1,17 @@
+
 name: TikTok LIVE a Discord
 
 on:
   schedule:
     - cron: "4-59/5 * * * *"
+
   workflow_dispatch:
+    inputs:
+      test_discord:
+        description: "Enviar un mensaje de prueba a Discord"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -22,36 +30,20 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
-          persist-credentials: true
 
       - name: Preparar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Verificar archivos del repositorio
+      - name: Verificar archivos
         run: |
-          echo "Rama actual:"
-          git branch --show-current
-
-          echo "Directorio de trabajo:"
           pwd
-
-          echo "Contenido de la raíz:"
           ls -la
-
-          echo "Archivos monitor.py encontrados:"
-          find . -type f -name "monitor.py" \
-            -not -path "./.git/*"
-
-          if [ ! -f "./monitor.py" ]; then
-            echo "::error::No existe monitor.py en la raíz de la rama main."
-            echo "Archivos registrados en Git:"
-            git ls-tree -r --name-only HEAD
+          test -f monitor.py || {
+            echo "::error::No se encuentra monitor.py en la raíz."
             exit 1
-          fi
-
-          echo "monitor.py encontrado correctamente."
+          }
 
       - name: Instalar dependencias
         run: python -m pip install --upgrade pip TikTokLive
@@ -59,14 +51,14 @@ jobs:
       - name: Comprobar directo y notificar
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TEST_DISCORD: ${{ inputs.test_discord }}
         run: python -u ./monitor.py
 
-      - name: Guardar estado para la siguiente comprobación
-        if: success()
+      - name: Guardar estado
+        if: success() && inputs.test_discord != true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
           git add live_state.json
 
           if ! git diff --cached --quiet; then
