@@ -9,6 +9,9 @@ from urllib.error import HTTPError, URLError
 USERNAME = "edwin7marfps"
 LIVE_URL = f"https://www.tiktok.com/@{USERNAME}/live"
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
+TEST_DISCORD = os.environ.get("TEST_DISCORD", "").lower() in {
+    "true", "1", "yes"
+}
 STATE_FILE = Path("live_state.json")
 
 
@@ -40,18 +43,11 @@ def save_state(live):
     )
 
 
-def send_discord_notification():
+def send_discord_message(message):
     if not WEBHOOK:
         raise RuntimeError(
             "Falta configurar DISCORD_WEBHOOK en GitHub Secrets."
         )
-
-    message = (
-        "@everyone\n"
-        "🔴 **¡ESTAMOS EN LIVE!** 🔥\n"
-        "Entra y acompáñanos un rato. 👀\n"
-        f"📲 {LIVE_URL}"
-    )
 
     payload = {
         "content": message,
@@ -72,7 +68,7 @@ def send_discord_notification():
                     f"Discord respondió HTTP {response.status}."
                 )
 
-        print("Notificación enviada correctamente a Discord.")
+        print("Discord aceptó el mensaje correctamente.")
 
     except HTTPError as error:
         details = error.read().decode("utf-8", "replace")
@@ -86,6 +82,16 @@ def send_discord_notification():
         ) from error
 
 
+def send_live_notification():
+    message = (
+        "@everyone\n"
+        "🔴 **¡ESTAMOS EN LIVE!** 🔥\n"
+        "Entra y acompáñanos un rato. 👀\n"
+        f"📲 {LIVE_URL}"
+    )
+    send_discord_message(message)
+
+
 def main():
     if not WEBHOOK:
         raise RuntimeError(
@@ -93,19 +99,29 @@ def main():
             "Settings > Secrets and variables > Actions."
         )
 
+    # Prueba manual: no consulta TikTok ni modifica el estado.
+    if TEST_DISCORD:
+        send_discord_message(
+            "🧪 **Prueba del webhook:** la conexión con Discord funciona."
+        )
+        print("Prueba del webhook completada.")
+        return
+
     live = asyncio.run(check_live())
     previous = get_previous_state()
 
     print(f"Estado actual: {'LIVE' if live else 'OFFLINE'}")
     print(f"Estado anterior: {previous!r}")
 
+    # Primera ejecución: registra el estado sin enviar una alerta.
     if previous is None:
         save_state(live)
         print("Estado inicial guardado; no se envió ninguna alerta.")
         return
 
+    # Notificar solo al detectar OFFLINE -> LIVE.
     if live and previous is False:
-        send_discord_notification()
+        send_live_notification()
     elif live and previous is True:
         print("El directo continúa. No se repite la alerta.")
     elif not live and previous is True:
