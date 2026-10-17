@@ -8,10 +8,12 @@ from urllib.error import HTTPError, URLError
 
 USERNAME = "edwin7marfps"
 LIVE_URL = f"https://www.tiktok.com/@{USERNAME}/live"
+
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 TEST_DISCORD = os.environ.get("TEST_DISCORD", "").lower() in {
     "true", "1", "yes"
 }
+
 STATE_FILE = Path("live_state.json")
 
 
@@ -36,7 +38,10 @@ def get_previous_state():
 def save_state(live):
     STATE_FILE.write_text(
         json.dumps(
-            {"username": USERNAME, "live": live},
+            {
+                "username": USERNAME,
+                "live": live
+            },
             indent=2
         ) + "\n",
         encoding="utf-8"
@@ -51,13 +56,24 @@ def send_discord_message(message):
 
     payload = {
         "content": message,
-        "allowed_mentions": {"parse": ["everyone"]}
+        "allowed_mentions": {
+            "parse": ["everyone"]
+        }
     }
 
     request = Request(
         WEBHOOK,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        data=json.dumps(
+            payload,
+            ensure_ascii=False
+        ).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "DiscordBot "
+                "(https://github.com/NinxyD/tiktok-live-discord, 1.0)"
+            )
+        },
         method="POST"
     )
 
@@ -89,6 +105,7 @@ def send_live_notification():
         "Entra y acompáñanos un rato. 👀\n"
         f"📲 {LIVE_URL}"
     )
+
     send_discord_message(message)
 
 
@@ -99,7 +116,8 @@ def main():
             "Settings > Secrets and variables > Actions."
         )
 
-    # Prueba manual: no consulta TikTok ni modifica el estado.
+    # La prueba manual solo comprueba Discord.
+    # No consulta TikTok ni modifica el estado del directo.
     if TEST_DISCORD:
         send_discord_message(
             "🧪 **Prueba del webhook:** la conexión con Discord funciona."
@@ -119,13 +137,16 @@ def main():
         print("Estado inicial guardado; no se envió ninguna alerta.")
         return
 
-    # Notificar solo al detectar OFFLINE -> LIVE.
+    # Notifica únicamente cuando cambia de OFFLINE a LIVE.
     if live and previous is False:
         send_live_notification()
+
     elif live and previous is True:
         print("El directo continúa. No se repite la alerta.")
+
     elif not live and previous is True:
         print("El directo terminó.")
+
     else:
         print("La cuenta sigue offline.")
 
