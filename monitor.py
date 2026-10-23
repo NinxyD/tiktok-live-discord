@@ -1,157 +1,113 @@
-
-import asyncio
-import json
 import os
-from pathlib import Path
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+import json
+import asyncio
+from datetime import datetime, timezone
+import requests
+from TikTokLive import TikTokLiveClient
 
-USERNAME = "edwin7marfps"
-LIVE_URL = f"https://www.tiktok.com/@{USERNAME}/live"
+# Configuración del usuario y Webhook
+TIKTOK_USERNAME = "edwin7marfps"
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK")
+STATE_FILE = "live_state.json"
 
-WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
-TEST_DISCORD = os.environ.get("TEST_DISCORD", "").lower() in {
-    "true", "1", "yes"
-}
-
-STATE_FILE = Path("live_state.json")
-
+client = TikTokLiveClient(unique_id=TIKTOK_USERNAME)
 
 async def check_live():
-    from TikTokLive import TikTokLiveClient
-
-    client = TikTokLiveClient(unique_id=USERNAME)
-    return await client.is_live()
-
-
-def get_previous_state():
-    if not STATE_FILE.exists():
-        return None
-
+    """Consulta la API de TikTok para verificar si la cuenta está en directo."""
     try:
-        data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        return data.get("live")
-    except (json.JSONDecodeError, OSError):
+        return await client.is_live()
+    except Exception as e:
+        print(f"⚠️ Error o respuesta no válida de TikTok: {e}")
         return None
 
+def load_state():
+    """Carga el estado anterior desde el archivo JSON."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ No se pudo leer {STATE_FILE}: {e}")
+    return {"is_live": False, "last_notified": None}
 
-def save_state(live):
-    STATE_FILE.write_text(
-        json.dumps(
-            {
-                "username": USERNAME,
-                "live": live
-            },
-            indent=2
-        ) + "\n",
-        encoding="utf-8"
-    )
+def save_state(is_live, last_notified=None):
+    """Guarda el estado actual en el archivo JSON."""
+    state = {
+        "is_live": is_live,
+        "last_notified": last_notified
+    }
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
 
-
-def send_discord_message(message):
-    if not WEBHOOK:
-        raise RuntimeError(
-            "Falta configurar DISCORD_WEBHOOK en GitHub Secrets."
-        )
+def send_discord_notification():
+    """Envía la alerta a Discord."""
+    if not DISCORD_WEBHOOK_URL:
+        print("❌ Error: No se ha configurado DISCORD_WEBHOOK.")
+        return False
 
     payload = {
-        "content": message,
-        "allowed_mentions": {
-            "parse": ["everyone"]
-        }
+        "content": f"🔴 **¡@everyone EN VIVO EN TIKTOK!** 🔴\n\n**{TIKTOK_USERNAME}** acaba de iniciar transmisión.\n\n👉 ¡Entra a verlo aquí!: https://www.tiktok.com/@{TIKTOK_USERNAME}/live"
     }
 
-    request = Request(
-        WEBHOOK,
-        data=json.dumps(
-            payload,
-            ensure_ascii=False
-        ).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": (
-                "DiscordBot "
-                "(https://github.com/NinxyD/tiktok-live-discord, 1.0)"
-            )
-        },
-        method="POST"
-    )
-
     try:
-        with urlopen(request, timeout=20) as response:
-            if not 200 <= response.status < 300:
-                raise RuntimeError(
-                    f"Discord respondió HTTP {response.status}."
-                )
-
-        print("Discord aceptó el mensaje correctamente.")
-
-    except HTTPError as error:
-        details = error.read().decode("utf-8", "replace")
-        raise RuntimeError(
-            f"Discord respondió HTTP {error.code}: {details}"
-        ) from error
-
-    except URLError as error:
-        raise RuntimeError(
-            f"No se pudo contactar con Discord: {error}"
-        ) from error
-
-
-def send_live_notification():
-    message = (
-        "@everyone\n"
-        "🔴 **¡ESTAMOS EN LIVE!** 🔥\n"
-        "Entra y acompáñanos un rato. 👀\n"
-        f"📲 {LIVE_URL}"
-    )
-
-    send_discord_message(message)
-
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        if response.status_code in [200, 204]:
+            print("✅ Notificación enviada con éxito a Discord.")
+            return True
+        else:
+            print(f"❌ Error al enviar a Discord ({response.status_code}): {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ Excepción al contactar a Discord: {e}")
+        return False
 
 def main():
-    if not WEBHOOK:
-        raise RuntimeError(
-            "No se encontró DISCORD_WEBHOOK. Configúralo en "
-            "Settings > Secrets and variables > Actions."
-        )
+    print(f"🔍 Comprobando estado para @{TIKTOK_USERNAME}...")
 
-    # La prueba manual solo comprueba Discord.
-    # No consulta TikTok ni modifica el estado del directo.
-    if TEST_DISCORD:
-        send_discord_message(
-            "🧪 **Prueba del webhook:** la conexión con Discord funciona."
-        )
-        print("Prueba del webhook completada.")
+    # Verificar si es una ejecución manual de prueba desde GitHub
+    is_test = os.environ.get("TEST_DISCORD", "false").lower() == "true"
+    if is_test:
+        print("🧪 Modo de prueba activado. Enviando notificación de prueba a Discord...")
+        send_discord_notification()
         return
 
-    live = asyncio.run(check_live())
-    previous = get_previous_state()
+    # Consultar TikTok
+    is_currently_live = asyncio.run(check_live())
 
-    print(f"Estado actual: {'LIVE' if live else 'OFFLINE'}")
-    print(f"Estado anterior: {previous!r}")
+    # Caso 1: TikTok dio error de respuesta (JSON/Bloqueo)
+    if is_currently_live is None:
+        print("⚠️ No se pudo confirmar el estado en esta revisión (TikTok no respondió correctamente). Se mantiene el estado anterior y se reintentará en 5 minutos.")
+        return  # Sale sin tocar live_state.json ni marcar error en GitHub
 
-    # Primera ejecución: registra el estado sin enviar una alerta.
-    if previous is None:
-        save_state(live)
-        print("Estado inicial guardado; no se envió ninguna alerta.")
-        return
+    # Cargar estado guardado
+    previous_state = load_state()
+    was_live = previous_state.get("is_live", False)
+    last_notified = previous_state.get("last_notified")
 
-    # Notifica únicamente cuando cambia de OFFLINE a LIVE.
-    if live and previous is False:
-        send_live_notification()
+    # Obtener fecha/hora actual estándar en UTC
+    now_utc = datetime.now(timezone.utc).isoformat()
 
-    elif live and previous is True:
-        print("El directo continúa. No se repite la alerta.")
+    print(f"Estado actual: {'LIVE' if is_currently_live else 'OFFLINE'}")
+    print(f"Estado anterior: {'LIVE' if was_live else 'OFFLINE'}")
 
-    elif not live and previous is True:
-        print("El directo terminó.")
+    # Caso 2: Transición de OFFLINE a LIVE (Inicio de directo)
+    if is_currently_live and not was_live:
+        print("🚨 ¡Nuevo directo detectado! Enviando notificación...")
+        success = send_discord_notification()
+        if success:
+            save_state(is_live=True, last_notified=now_utc)
+        else:
+            # Si falló la notificación a Discord, conservamos el estado para reintentar
+            save_state(is_live=False, last_notified=last_notified)
 
+    # Caso 3: Sigue en vivo o se apagó
     else:
-        print("La cuenta sigue offline.")
+        if not is_currently_live and was_live:
+            print("🔴 El directo ha finalizado. Actualizando estado a OFFLINE.")
+        else:
+            print("ℹ️ La cuenta permanece en el mismo estado. Sin cambios.")
 
-    save_state(live)
-
+        save_state(is_live=is_currently_live, last_notified=last_notified)
 
 if __name__ == "__main__":
     main()
