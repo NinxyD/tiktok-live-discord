@@ -13,7 +13,7 @@ on:
         type: boolean
 
   repository_dispatch:
-    types: [run-tiktok-check]  # <-- ESTO ES LO QUE DEBES AGREGAR
+    types: [run-tiktok-check]
 
 permissions:
   contents: write
@@ -48,7 +48,7 @@ jobs:
           }
 
       - name: Instalar dependencias
-        run: python -m pip install --upgrade pip TikTokLive
+        run: python -m pip install --upgrade pip TikTokLive requests
 
       - name: Comprobar directo y notificar
         env:
